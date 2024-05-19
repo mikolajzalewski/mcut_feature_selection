@@ -4,20 +4,22 @@ import warnings
 from itertools import combinations
 from typing import Callable, List
 
-import joblib
+# import joblib
 import numpy as np
 import pandas as pd
 import scipy
 import statsmodels.api as sm
-from czech_models.functions.functions import broader_df
 from IPython.display import clear_output, display
 from numba import jit
 from tqdm.auto import tqdm
+from sklearn.linear_model import Lasso
+
 
 ### METRICS #######################################################################################
 
 
 def mean_std(x):
+    x = x.copy()
     """Function to calculate mean to std ratio"""
     if np.std(x) == 0:
         return 0
@@ -26,6 +28,7 @@ def mean_std(x):
 
 
 def winrate(x):
+    x = x.copy()
     """Function to calculate winrate"""
     if len(x) == 0:
         return 0
@@ -34,6 +37,7 @@ def winrate(x):
 
 
 def effectiveness(df):
+    df = df.copy()
     if np.sum(abs(df)) == 0:
         return 0
     df = df.copy()
@@ -42,7 +46,7 @@ def effectiveness(df):
 
 
 
-mtrcs = ["mean", "sum", "count", mean_std, winrate, effectiveness]
+mtrcs = [np.mean, np.sum, "count", mean_std, winrate, effectiveness]
 
 
 ################################################################################################
@@ -58,28 +62,28 @@ def add_diff(x):
 def add_daily_diff(x):
     '''Function to calculate difference between two consecutive values from the same hour and minute'''
     x = x.copy()
-    return x.groupby([x.index.hour, x.index.minute]).diff()
+    return x.groupby([x.index.hour, x.index.minute], observed=True).diff()
 
 def add_rolling_mean(x, window=3):
     '''Function to calculate rolling mean, for the same hour and minute'''
     x = x.copy()
-    return x.groupby([x.index.hour, x.index.minute]).rolling(window=window).mean().droplevel([0,1])
+    return x.groupby([x.index.hour, x.index.minute], observed=True).rolling(window=window).mean().droplevel([0,1])
 
 def add_rolling_std(x, window=3):
     '''Function to calculate rolling std, for the same hour and minute'''
     x = x.copy()
-    return x.groupby([x.index.hour, x.index.minute]).rolling(window=window).std().droplevel([0,1])
+    return x.groupby([x.index.hour, x.index.minute], observed=True).rolling(window=window).std().droplevel([0,1])
 
 def broader_df(df, not_known: list = []):
     df_ = df.copy()
     '''Function to add features to dataframe'''
     for col in tqdm(df_.columns):
-        if col not in not_known:
-            df_[col+'_diff'] = add_diff(df_[col])
-        df_[col+'_daily_diff'] = add_daily_diff(df_[col])
-        df_[col+'_rolling_3_mean'] = df_[col] - add_rolling_mean(df_[col], window=3)
+        # if col not in not_known:
+        #     df_[col+'_diff'] = add_diff(df_[col])
+        # df_[col+'_daily_diff'] = add_daily_diff(df_[col])
+        # df_[col+'_rolling_3_mean'] = df_[col] - add_rolling_mean(df_[col], window=3)
         df_[col+'_rolling_7_mean'] = df_[col] - add_rolling_mean(df_[col], window=7)
-        df_[col+'_rolling_14_mean'] = df_[col] - add_rolling_mean(df_[col], window=14)
+        # df_[col+'_rolling_14_mean'] = df_[col] - add_rolling_mean(df_[col], window=14)
     return df_
 
 @jit()
@@ -395,7 +399,7 @@ def iterations(col, data, y_col, score_function, n_bins, func=pd.qcut, threshhol
         if bins is None:
             return []
 
-        raw = data[y_col].groupby([bins])
+        raw = data[y_col].groupby([bins], observed=True)
 
         qcut_vals = raw.agg(score_function)
 
@@ -744,7 +748,7 @@ class AutoMCUT:
     def __init__(
         self,
         data,
-        number_of_folds,
+        number_of_time_folds,
         target_variable,
         score_function,
         numb_of_bins,
@@ -753,7 +757,8 @@ class AutoMCUT:
         not_known=None,
     ):
         self.data = data
-        self.k = number_of_folds
+        self.original_data = data.copy()
+        self.k = number_of_time_folds
         self.marg = target_variable
         self.func = score_function
         self.numb_of_bins = numb_of_bins
@@ -771,8 +776,10 @@ class AutoMCUT:
 
     def __call__(self, *args, **kwargs):
         return self.func(*args, **kwargs)
+    
+    
 
-    def find_best_features(self, how_many_folds=4, numb_of_best_features=200, broad_df = False):
+    def find_best_features(self, how_many_folds=4, numb_of_best_features=200, broad_df = False, numb_of_features_in_each_group = 5):
         """
         Function takes dataframe and returns best features for given target variable.
         It allows to start from small score of correlation and then automatically increase it.
@@ -850,136 +857,99 @@ class AutoMCUT:
         print("I saved it as 'results'.")
         self.results = pd.concat([results, self.results]).drop_duplicates()
         self.results["abs_mono"] = abs(self.results.mono)
+        self.find_optimal_variables_lasso(numb_of_features_in_each_group)
+        print("I saved importantn features due to the Lasso regression as an attribute 'important_features'.")
+        
+    def find_optimal_variables_lasso(self, numb_of_features_in_each_group):
+        """Funtion takes results generated by find_best_features, takes numb_of_features_in_each_group with the highest abs_mono in each group defined by n_features.
+        Next it split combined features into single features, and then it uses Lasso regression to find the best combination of variables.
 
-    def find_optimal_variables(self, numb_of_features_in_each_group = 2):
-        """
-        Find the set of independent variables that maximizes the heuristic.
+        Args:
+            alpha (float, optional): _description_. Defaults to 0.1.
+            max_iter (int, optional): _description_. Defaults to 1000.
+            numb_of_features_in_each_group (int, optional): _description_. Defaults to 2."""
+        data = self.results.sort_values("abs_mono")
+        best_features_raw = data.groupby(data.n_features, observed=True).tail(numb_of_features_in_each_group).feature.tolist()
+        
+        duplicated_final_list = []
+        
+        for v in best_features_raw:
+            vs = v.split(' ')
+            for vsv in vs:
+                if len(vsv)>1:
+                    duplicated_final_list.append(vsv)
+        cols = list(set(duplicated_final_list))
 
-        Parameters:
-        - df (DataFrame): DataFrame containing the variables.
-        - margin_variable (str): Name of the dependent variable (margin).
+        lasso = Lasso( max_iter=10000 )
+        lasso.fit(self.original_data[cols], self.data[self.marg])
 
-        Returns:
-        - tuple: (best_set, max_heuristic, dict) where best_set is the set of variables that maximizes the heuristic
-                and max_heuristic is the value of the heuristic and dict is a dictionary mapping the names of the
-                    variables in best_set to the names of the variables in df.
-        """
-        data = self.data.copy()
-        margin_variable = self.marg
+        important_features = [feature for feature, coef in zip(cols, np.round(lasso.coef_,3)) if coef != 0]
+        self.important_features = important_features
+        
+        return important_features
+        
+        
 
-        if "results" not in dir(self):
-            self.find_best_features()
-        agg_results = self.results.groupby(self.results.n_features).apply(lambda x: x.sort_values(["abs_mono", "efficiency"]).tail(numb_of_features_in_each_group)).droplevel(0)
+    # def find_optimal_variables_heuristic(self, numb_of_features_in_each_group = 2):
+    #     """
+    #     Find the set of independent variables that maximizes the heuristic.
 
-        # create df
-        df = pd.DataFrame(index=data.index)
-        dc = {}
-        for i, col in enumerate(agg_results.feature.tolist()):
-            df[f"zm_{i}"] = data.eval(col)
-            dc[f"zm_{i}"] = col
-        df["margin"] = data[margin_variable]
+    #     Parameters:
+    #     - df (DataFrame): DataFrame containing the variables.
+    #     - margin_variable (str): Name of the dependent variable (margin).
 
-        # Compute the correlation matrix
-        corr_matrix = df.corr()
+    #     Returns:
+    #     - tuple: (best_set, max_heuristic, dict) where best_set is the set of variables that maximizes the heuristic
+    #             and max_heuristic is the value of the heuristic and dict is a dictionary mapping the names of the
+    #                 variables in best_set to the names of the variables in df.
+    #     """
+    #     data = self.data.copy()
+    #     margin_variable = self.marg
 
-        # Initialize variables for tracking the best result
-        max_heuristic = -np.inf
-        best_set = None
+    #     if "results" not in dir(self):
+    #         self.find_best_features()
+    #     agg_results = self.results.groupby(self.results.n_features).apply(lambda x: x.sort_values(["abs_mono", "efficiency"]).tail(numb_of_features_in_each_group)).droplevel(0)
 
-        # Iterate over all possible combinations of independent variables
-        for k in range(1, len(df.columns)):
-            clear_output()
-            print(f"Round {k}/{len(df.columns)-1}:")
-            for subset in tqdm(combinations(df.columns[df.columns != "margin"], k)):
-                # Calculate r_cf - average correlation between independent variables and dependent variable
-                r_cf = abs(corr_matrix.loc[list(subset), "margin"]).mean()
+    #     # create df
+    #     df = pd.DataFrame(index=data.index)
+    #     dc = {}
+    #     for i, col in enumerate(agg_results.feature.tolist()):
+    #         df[f"zm_{i}"] = data.eval(col)
+    #         dc[f"zm_{i}"] = col
+    #     df["margin"] = data[margin_variable]
 
-                # Calculate r_ff - average correlation between independent variables
-                r_ff = abs(corr_matrix.loc[subset, subset]).mean()
-                if type(r_ff) == pd.Series:
-                    r_ff = r_ff.values[0]
+    #     # Compute the correlation matrix
+    #     corr_matrix = df.corr()
 
-                # Calculate heuristic
-                heuristic = (k * r_cf) / np.sqrt(k + k * (k - 1) * r_ff)
-                #             heuristic = (r_cf) / (np.sqrt(k) * r_ff)
+    #     # Initialize variables for tracking the best result
+    #     max_heuristic = -np.inf
+    #     best_set = None
 
-                # Check if this set of variables is the best so far
-                if heuristic > max_heuristic:
-                    max_heuristic = heuristic
-                    best_set = subset
+    #     # Iterate over all possible combinations of independent variables
+    #     for k in range(1, len(df.columns)):
+    #         clear_output()
+    #         print(f"Round {k}/{len(df.columns)-1}:")
+    #         for subset in tqdm(combinations(df.columns[df.columns != "margin"], k)):
+    #             # Calculate r_cf - average correlation between independent variables and dependent variable
+    #             r_cf = abs(corr_matrix.loc[list(subset), "margin"]).mean()
 
-        print("Best set of variables:")
-        print(best_set)
-        print('I saved it as "best_set".')
-        self.best_set = best_set
-        print("Dict to map variables is saved as 'dc'.")
-        self.dc = dc
+    #             # Calculate r_ff - average correlation between independent variables
+    #             r_ff = abs(corr_matrix.loc[subset, subset]).mean()
+    #             if type(r_ff) == pd.Series:
+    #                 r_ff = r_ff.values[0]
 
-    def generate_report(self, err=0, train_period_in_days=365, return_signals = False, side = None):
-        """
-        Function return basic metrics and cumsum of pnl for OLS model.
-        It uses best_set and dc from find_optimal_variables.
-        Model is retrain every day, train data is 1 year before test data.
-        PnL is margin * sign(pred)
-        return_signals: return model predictions as a series
-        side: if you have two prices, you can choose only one side of predictions as a taken trades
-        """
-        assert side in [None, 'short', 'long']
-        data = self.data.copy()
-        margin_variable = self.marg
-        best_set = self.best_set
-        dc = self.dc
+    #             # Calculate heuristic
+    #             heuristic = (k * r_cf) / np.sqrt(k + k * (k - 1) * r_ff)
+    #             #             heuristic = (r_cf) / (np.sqrt(k) * r_ff)
 
-        if "own_set" in dir(self):
-            best_set = self.own_set
+    #             # Check if this set of variables is the best so far
+    #             if heuristic > max_heuristic:
+    #                 max_heuristic = heuristic
+    #                 best_set = subset
 
-        t = pd.DataFrame(index=data.index)
-        for k in best_set:
-            if str(k) in dc.keys():
-                t[k] = data.eval(dc[k])
-            else:
-                t[k] = data.eval(k)
-        t["const"] = 1
-        t["margin"] = data[margin_variable]
-
-        cols = t.columns.tolist()[:-1]
-
-        d = t.dropna()
-
-        d["pred_OLS"] = np.nan
-
-        for date in pd.date_range(
-            d.index[0] + dt.timedelta(train_period_in_days),
-            d.index[-1],
-            freq="D",
-            tz="CET",
-        ):
-            start_date = date - dt.timedelta(days=train_period_in_days)
-
-            train = d.loc[start_date : date - dt.timedelta(1) - dt.timedelta(hours=1)]
-            if train.empty:
-                break
-            test = d.loc[
-                date
-                + dt.timedelta(days=1) : date
-                + dt.timedelta(days=1)
-                + dt.timedelta(hours=23)
-            ]
-
-            model = sm.OLS(train.margin, train[cols]).fit()
-            d.loc[test.index, "pred_OLS"] = model.predict(test[cols])
-
-        d["pnl_OLS"] = np.where(
-            d.pred_OLS > 0, d.margin, np.where(d.pred_OLS < 0, -d.margin, np.nan)
-        )
-        d["pnl_OLS"] = np.where(abs(d.pred_OLS) > err, d["pnl_OLS"], np.nan)
-
-        if side == 'long':
-            d["pnl_OLS"] = np.where(d.pred_OLS > 0, d["pnl_OLS"], np.nan)
-        elif side == 'short':
-            d["pnl_OLS"] = np.where(d.pred_OLS < 0, d["pnl_OLS"], np.nan)
-
-        model.summary()
-
-        if return_signals:
-            return d.pred_OLS
+    #     print("Best set of variables:")
+    #     print(best_set)
+    #     print('I saved it as "best_set".')
+    #     self.best_set = best_set
+    #     print("Dict to map variables is saved as 'dc'.")
+    #     self.dc = dc
