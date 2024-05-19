@@ -196,4 +196,3 @@ def mcut_feature_selection(
     m = AutoMCUT(data, number_of_time_folds, target_variable, score_function, numb_of_bins, binning_func, verbose, not_known)
     m.find_best_features( how_many_folds, numb_of_best_features, broad_df = False, numb_of_features_in_each_group = 5)
     return m.find_optimal_variables_lasso(numb_of_features_in_each_group)
-# data
