@@ -4,7 +4,6 @@ import warnings
 from itertools import combinations
 from typing import Callable, List
 
-# import joblib
 import numpy as np
 import pandas as pd
 import scipy
@@ -88,19 +87,15 @@ def broader_df(df, not_known: list = []):
 
 @jit()
 def remove_outliers_iqr_and_return_normal_len(data, numb_of_bins):
-    # Calculate the interquartile range (IQR)
     q1 = np.percentile(data, 25)
     q3 = np.percentile(data, 75)
     iqr = q3 - q1
 
-    # Define the upper and lower bounds for outliers
     lower_bound = q1 - 1.5 * iqr
     upper_bound = q3 + 1.5 * iqr
 
-    # Identify outliers
     outliers = (data < lower_bound) | (data > upper_bound)
 
-    # Remove outliers
     cleaned_data = data[~outliers]
 
     return cleaned_data, np.round(
@@ -162,25 +157,19 @@ def expand_if_empty(dataframe, list_orig, threshhold):
     """
     Function to expand intervals if they have less observations than threshold.
     """
-    # Initialize the start index, end index, and the list of new points
     start_idx, end_idx = 0, 1
     new_list = np.array([list_orig[start_idx] - 0.001])
 
     while end_idx < (len(list_orig) - 1):
-        # Calculate the interval
         interval = dataframe[
             (dataframe >= list_orig[start_idx]) & (dataframe < list_orig[end_idx])
         ]
 
-        # Check if there are at least 'threshold' observations in the interval
         if interval.shape[0] >= threshhold:
-            # If so, add the right point to the new list
             new_list = np.append(new_list, list_orig[end_idx].round(3))
-            # Move to the next interval
             start_idx += 1
             end_idx += 1
         else:
-            # If not, remove the right point and restart from the beginning
             end_idx += 1
 
     interval = dataframe[
@@ -237,7 +226,6 @@ def raw_mcut(data, numb_of_bins, threshhold, long, short, verbose, duplicates):
 
     percentiles = np.linspace(0, 1, numb_of_bins + 1)
 
-    # Obliczanie kwantyli datala każdataej wartości procentyli
     quantiles = np.percentile(data, percentiles * 100)
 
     list_after_first_iter = iterate_points(

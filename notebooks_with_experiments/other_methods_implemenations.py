@@ -31,13 +31,13 @@ def heuristic(k, r_cf, r_ff):
 def mean_correlation(indices, correlation_matrix):
     n = len(indices)
     if n == 1:
-        return 0  # nie można obliczyć r_ff dla jednej zmiennej
+        return 0 
     suma = sum(correlation_matrix[i, j] for i in indices for j in indices if i != j)
     return suma / (n * (n - 1))
 
 def maximize_heuristic(correlation_matrix):
-    n = correlation_matrix.shape[0] - 1  # liczba zmiennych oprócz 'y'
-    max_n = min(n, 10)  # maksymalna liczba zmiennych w modelu
+    n = correlation_matrix.shape[0] - 1 
+    max_n = min(n, 10) 
     best_value = -np.inf
     best_k = None
     best_indices = None
@@ -93,11 +93,9 @@ def sequential_feature_selection(X, y, max_features=None):
     if max_features is None:
         max_features = X.shape[1]
     
-    # Initial set of feature indices
     selected_features = []
     remaining_features = list(X.columns)
     
-    # Model to use for feature evaluation
     model = LinearRegression()
     
     while len(selected_features) < max_features:
@@ -105,19 +103,15 @@ def sequential_feature_selection(X, y, max_features=None):
         best_feature = None
         
         for feature in remaining_features:
-            # Add the tested feature to the already selected
             features_to_test = selected_features + [feature]
             
-            # Perform cross-validation with the current set of features
             scores = cross_val_score(model, X[features_to_test], y, cv=5)
-            mean_score = scores.mean()  # Use the mean of validation results
+            mean_score = scores.mean() 
             
-            # Check if we found a new best feature
             if mean_score > best_score:
                 best_score = mean_score
                 best_feature = feature
         
-        # If we found a new best feature, add it to the set
         if best_feature is not None:
             selected_features.append(best_feature)
             remaining_features.remove(best_feature)
@@ -145,38 +139,28 @@ def lasso_feature_selection(X, y, alpha=0.1):
 # Relief Feature Selection
 
 def relief_algorithm(X, y, n_features_to_select):
-    # Konwersja DataFrame i Series do numpy array
     columns = X.columns
     X = X.values
     y = y.values
     
-    # Inicjalizacja wagi cech
     feature_scores = np.zeros(X.shape[1])
     
-    # Instancja NearestNeighbors do znajdowania najbliższych sąsiadów
     nn = NearestNeighbors(n_neighbors=2).fit(X)
     
-    # Główna pętla algorytmu Relief
     for index, instance in enumerate(X):
-        # Znajdowanie najbliższych sąsiadów (1 z tej samej klasy i 1 z innej)
         _, neighbors = nn.kneighbors([instance])
         hit_index = neighbors[0][0] if y[neighbors[0][0]] == y[index] else neighbors[0][1]
         miss_index = neighbors[0][1] if y[neighbors[0][1]] != y[index] else neighbors[0][0]
         
-        # Obliczenie różnicy między instancją a hit i miss
         hit_diff = np.abs(instance - X[hit_index])
         miss_diff = np.abs(instance - X[miss_index])
         
-        # Aktualizacja wagi cech
         feature_scores += -hit_diff if y[hit_index] == y[index] else hit_diff
         feature_scores += miss_diff if y[miss_index] != y[index] else -miss_diff
     
-    # Normalizacja wyników przez liczbę instancji
     feature_scores /= X.shape[0]
     
-    # Wybór najważniejszych cech
     important_indices = np.argsort(-feature_scores)[:n_features_to_select]
-    # return columns names
     return columns[important_indices].tolist()
 
 from mcut import AutoMCUT, mcut, mtrcs
